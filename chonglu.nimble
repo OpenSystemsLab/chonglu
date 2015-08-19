@@ -6,4 +6,4 @@ description   = "Chống Lũ - SYN Flood Stopper"
 license       = "MIT"
 
 [Deps]
-Requires: "nim >= 0.11.2, https://github.com/rgv151/pfring.nim"
+Requires: "nim >= 0.11.2, redis, https://github.com/rgv151/pfring.nim"

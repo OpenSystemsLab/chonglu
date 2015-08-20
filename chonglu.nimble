@@ -5,6 +5,9 @@ author        = "Huy Doan"
 description   = "Chống Lũ - SYN Flood Stopper"
 license       = "MIT"
 
+bin	      = "chonglu"
+srcDir 	      = "src"
+
 [Deps]
 Requires: "nim >= 0.11.2, redis"
 Requires: "https://github.com/rgv151/pfring.nim"

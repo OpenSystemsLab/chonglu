@@ -55,7 +55,11 @@ proc signalHandler() {.noconv.} =
 
 proc packetListener(h: ptr pfring_pkthdr, p: ptr cstring, user_bytes: ptr cstring) =
   p.parsePacket(h, 4, 0, 0)
-  var packet = addr h.extended_hdr.parsed_pkt
+  let packet = addr h.extended_hdr.parsed_pkt
+
+  if packet.l3_proto.int != IPPROTO_TCP:
+    return
+
   var flags = packet.tcp.flags
   var syn =  (flags and TH_SYN) != 0
   var ack =  (flags and TH_ACK) != 0
@@ -72,14 +76,16 @@ proc packetListener(h: ptr pfring_pkthdr, p: ptr cstring, user_bytes: ptr cstrin
   echo s
   if packet.ip_version == 4:
     var src_addr, dst_addr: InAddr
-    src_addr.s_addr = htonl(packet.ip_src.v4.int32)
-    dst_addr.s_addr = htonl(packet.ip_dst.v4.int32)
-    #echo packet.dmac, " ", packet.smac
-    echo packet.ip_src.v4, " ", packet.ip_dst.v4
+
+    echo packet.ip_src.v4, ", ", packet.ip_dst.v4, ", ", packet.tcp.flags
+
+    src_addr.s_addr = htonl(packet.ip_src.v4)
+    dst_addr.s_addr = htonl(packet.ip_dst.v4)
     echo inet_ntoa(src_addr), " ", inet_ntoa(dst_addr)
     echo packet.l4_src_port, " ", packet.l4_dst_port
-    echo packet.l3_proto, " ", packet.ip_tos
-
+    #echo packet.l3_proto, " ", packet.ip_tos
+  else:
+    echo "IPv6"
 
 proc main(config: Config) =
   var ring = newRing(config.interfaces, 65536, PF_RING_PROMISC or PF_RING_DO_NOT_PARSE)

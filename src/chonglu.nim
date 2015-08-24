@@ -65,7 +65,7 @@ proc signalHandler() {.noconv.} =
 proc packetListener(h: ptr pfring_pkthdr, p: ptr cstring, user_bytes: ptr cstring) =
   var src_addr, dst_addr {.global.}: InAddr
   var hasSyn, hasAck: bool
-
+  var info: Info
   p.parsePacket(h, 4, 0, 0)
   let pkt = addr h.extended_hdr.parsed_pkt
 
@@ -85,14 +85,13 @@ proc packetListener(h: ptr pfring_pkthdr, p: ptr cstring, user_bytes: ptr cstrin
 
     if hasSyn:
       if not counters.hasKey(pkt.ip_src.v4):
-        var info: Info
-        info.count = 0
+        info.count = 1
         counters[pkt.ip_src.v4] = info
-
       else:
-        var x = counters[pkt.ip_src.v4]
-        inc(x.count)
-        echo x.count
+        info = counters[pkt.ip_src.v4]
+        inc(info.count)
+        counters[pkt.ip_src.v4] = info
+        echo info.count
 
 
 

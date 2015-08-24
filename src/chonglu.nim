@@ -2,6 +2,7 @@ import posix
 import strutils
 import parseopt2
 import redis
+import tables
 
 import ../../pfring.nim/pfring/core
 
@@ -23,6 +24,16 @@ Options:
   --config=<path>  path to config file [default: $#]
 """ % [name, defaultConfig]
 
+type
+  Info = object
+    count: int
+    firstTime: Timeval
+
+
+var
+  ring: Ring
+  cfg: Config
+  counters = initTable[int32, Info]()
 
 proc showVersion() =
   quit("$# version $# compiled at $# $#" % [name, version, CompileDate, CompileTime], QuitSuccess)
@@ -46,57 +57,58 @@ proc parseCommandLine(configFile: var string) =
     of cmdEnd: break
 
 proc signalHandler() {.noconv.} =
-  echo "Blah"
-#  var stat = ring.getStats()
-#  echo "Received " & $stat.received & " packets, dropped " & $stat.dropped & " packets"
-#  ring.close()
+  let stat = ring.getStats()
+  echo "Received " & $stat.received & " packets, dropped " & $stat.dropped & " packets"
+  ring.close()
   quit(QuitSuccess)
 
-
 proc packetListener(h: ptr pfring_pkthdr, p: ptr cstring, user_bytes: ptr cstring) =
-  p.parsePacket(h, 4, 0, 0)
-  let packet = addr h.extended_hdr.parsed_pkt
+  var src_addr, dst_addr {.global.}: InAddr
+  var hasSyn, hasAck: bool
 
-  if packet.l3_proto.int != IPPROTO_TCP:
+  p.parsePacket(h, 4, 0, 0)
+  let pkt = addr h.extended_hdr.parsed_pkt
+
+  if pkt.l3_proto.int != IPPROTO_TCP:
     return
 
-  var flags = packet.tcp.flags
-  var syn =  (flags and TH_SYN) != 0
-  var ack =  (flags and TH_ACK) != 0
-  var fin = (flags and TH_FIN) != 0
+  if pkt.ip_version == 4:
+    if not (pkt.l4_dst_port in cfg.ports):
+      return
 
-  var s = "..."
+    src_addr.s_addr = htonl(pkt.ip_src.v4)
+    dst_addr.s_addr = htonl(pkt.ip_dst.v4)
+    echo "$#:$# => $#:$#" % [$inet_ntoa(src_addr), $pkt.l4_src_port, $inet_ntoa(dst_addr), $pkt.l4_dst_port]
 
-  if syn:
-    s[0] = 'S'
-  if ack:
-    s[1] = 'A'
-  if fin:
-    s[2] = 'F'
-  echo s
-  if packet.ip_version == 4:
-    var src_addr, dst_addr: InAddr
+    hasSyn = (pkt.tcp.flags and TH_SYN) != 0
+    hasAck = (pkt.tcp.flags and TH_ACK) != 0
 
-    echo packet.ip_src.v4, ", ", packet.ip_dst.v4, ", ", packet.tcp.flags
+    if hasSyn:
+      if not counters.hasKey(pkt.ip_src.v4):
+        var info: Info
+        info.count = 0
+        counters[pkt.ip_src.v4] = info
 
-    src_addr.s_addr = htonl(packet.ip_src.v4)
-    dst_addr.s_addr = htonl(packet.ip_dst.v4)
-    echo inet_ntoa(src_addr), " ", inet_ntoa(dst_addr)
-    echo packet.l4_src_port, " ", packet.l4_dst_port
-    #echo packet.l3_proto, " ", packet.ip_tos
-  else:
-    echo "IPv6"
+      else:
+        var x = counters[pkt.ip_src.v4]
+        inc(x.count)
+        echo x.count
 
-proc main(config: Config) =
-  var ring = newRing(config.interfaces, 65536, PF_RING_PROMISC or PF_RING_DO_NOT_PARSE)
+
+
+
+
+  # else: ipv6 is not supported yet
+proc main() =
+  ring = newRing(cfg.iface, 65536, PF_RING_PROMISC or PF_RING_DO_NOT_PARSE)
 
   if ring.cptr.isNil:
     quit("pfring_open error: $#" % $errno, QuitFailure)
 
   setControlCHook(signalHandler)
 
-  #ring.setDirection(ReceiveOnly)
-  #ring.setSocketMode(ReadOnly)
+  ring.setDirection(ReceiveOnly)
+  ring.setSocketMode(ReadOnly)
   #ring.setBPFFilter(config.filter)
   ring.enable()
   ring.startLoop(packetListener, nil, true);
@@ -104,5 +116,5 @@ proc main(config: Config) =
 when isMainModule:
   var cfgFile: string
   parseCommandLine(cfgFile)
-  let cfg = parseConfig(cfgFile)
-  main(cfg)
+  cfg = parseConfig(cfgFile)
+  main()

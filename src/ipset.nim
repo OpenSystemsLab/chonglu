@@ -3,8 +3,13 @@ import ../../libipset.nim/libipset
 export ipset_cmd_enum
 
 
+#proc outfn(fmt: string, n: varargs[string, $]):
+proc c_printf(frmt: cstring) {.importc: "printf", header: "<stdio.h>", varargs.}
+
 proc ipcmd*(blacklist: string, address: cstring, cmd: ipset_cmd_enum): int =
-  var session = ipset_session_init(nil);
+  ipset_load_types()
+
+  var session = ipset_session_init(c_printf);
 
   if session.isNil:
     echo "Cannot init session"
@@ -14,11 +19,17 @@ proc ipcmd*(blacklist: string, address: cstring, cmd: ipset_cmd_enum): int =
   if ret < 0:
     return 2
 
+  var err = ipset_session_error(session)
+  if not err.isNil:
+    echo err
+
   var typ = ipset_type_get(session, cmd)
   if typ.isNil:
     return 3
 
-  ret = ipset_parse_elem(session, typ.last_elem_optional, address)
+
+
+  ret = ipset_parse_elem(session, true, address)
   if ret < 0:
     return 4
 
@@ -34,3 +45,7 @@ proc ipcmd*(blacklist: string, address: cstring, cmd: ipset_cmd_enum): int =
 
 
   return 0
+
+
+when isMainModule:
+  echo ipcmd("blacklist", "8.8.8.8", IPSET_CMD_ADD)

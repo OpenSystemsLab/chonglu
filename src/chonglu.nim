@@ -3,7 +3,9 @@ import strutils
 import parseopt2
 import redis
 import tables
+import times
 
+import ipset
 import ../../pfring.nim/pfring/core
 
 import config
@@ -26,14 +28,14 @@ Options:
 
 type
   Info = object
-    count: int
-    firstTime: Timeval
-
+    counters: array[0..5, int]
+    lastActive: Time
 
 var
   ring: Ring
   cfg: Config
-  counters = initTable[int32, Info]()
+  lookupTable = initTable[int32, Info]()
+  banList: seq[int32] = @[]
 
 proc showVersion() =
   quit("$# version $# compiled at $# $#" % [name, version, CompileDate, CompileTime], QuitSuccess)
@@ -62,10 +64,18 @@ proc signalHandler() {.noconv.} =
   ring.close()
   quit(QuitSuccess)
 
+
+proc accumulateCounters(info: Info): int =
+  result = 0
+  for i in info.counters:
+    result += i
+
 proc packetListener(h: ptr pfring_pkthdr, p: ptr cstring, user_bytes: ptr cstring) =
   var src_addr, dst_addr {.global.}: InAddr
   var hasSyn, hasAck: bool
-  var info: Info
+#  var info: Info
+  var currentSecond: int
+
   p.parsePacket(h, 4, 0, 0)
   let pkt = addr h.extended_hdr.parsed_pkt
 
@@ -76,6 +86,10 @@ proc packetListener(h: ptr pfring_pkthdr, p: ptr cstring, user_bytes: ptr cstrin
     if not (pkt.l4_dst_port in cfg.ports):
       return
 
+    if banList.contains(pkt.ip_src.v4):
+      # already banned
+      return
+
     src_addr.s_addr = htonl(pkt.ip_src.v4)
     dst_addr.s_addr = htonl(pkt.ip_dst.v4)
     echo "$#:$# => $#:$#" % [$inet_ntoa(src_addr), $pkt.l4_src_port, $inet_ntoa(dst_addr), $pkt.l4_dst_port]
@@ -84,15 +98,36 @@ proc packetListener(h: ptr pfring_pkthdr, p: ptr cstring, user_bytes: ptr cstrin
     hasAck = (pkt.tcp.flags and TH_ACK) != 0
 
     if hasSyn:
-      if not counters.hasKey(pkt.ip_src.v4):
-        info.count = 1
-        counters[pkt.ip_src.v4] = info
-      else:
-        info = counters[pkt.ip_src.v4]
-        inc(info.count)
-        counters[pkt.ip_src.v4] = info
-        echo info.count
+      currentSecond = getLocalTime(getTime()).second mod cfg.recalculationTime
 
+      if not lookupTable.hasKey(pkt.ip_src.v4):
+        var info: Info
+        info.lastActive = getTime()
+        info.counters[currentSecond] = 1
+        lookupTable[pkt.ip_src.v4] = info
+      else:
+        var indexForNullify = abs(cfg.recalculationTime - currentSecond)
+
+        var info = lookupTable[pkt.ip_src.v4]
+        info.counters[indexForNullify] = 0
+        inc(info.counters[currentSecond])
+        info.lastActive = getTime()
+        lookupTable[pkt.ip_src.v4] = info
+
+
+        var requestsPerCalculationPeriod = lookupTable[pkt.ip_src.v4].accumulateCounters()
+        var requestsPerSecond = int(requestsPerCalculationPeriod / cfg.recalculationTime)
+
+        if requestsPerSecond >= cfg.rateLimit:
+          echo "[BAN] IP: ", inet_ntoa(src_addr), " exeed rate limit ", requestsPerSecond, " requests"
+
+          # call ipset ban
+          let ret = ipcmd(cfg.blacklistName, inet_ntoa(src_addr), IPSET_CMD_ADD)
+          if ret == 0:
+            # Add to ban list
+            banList.add(pkt.ip_src.v4)
+          else:
+            echo "[ERROR] Ban failed with error: ", ret
 
 
 

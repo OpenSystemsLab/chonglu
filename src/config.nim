@@ -16,8 +16,8 @@ type
     resetOnAck*: bool
     backend*: backend
     redisHost*, redisPort*, redisDatabase*, redisPrefix*: string
-
-
+    recalculationTime*: int
+    blacklistName*: string
 
 proc initConfig(): Config =
   result.iface = "any"
@@ -69,6 +69,10 @@ proc parseConfig*(path: string): Config =
           result.redisDatabase = e.value
         elif e.key == "redis_prefix":
           result.redisPrefix = e.value
+        elif e.key == "recalculation_time":
+          result.recalculationTime = parseInt(e.value)
+        elif e.key == "ipset_blacklist":
+          result.blacklistName = e.value
         else:
           echo("Unknown config value: " & e.key & ": " & e.value)
       of cfgError:

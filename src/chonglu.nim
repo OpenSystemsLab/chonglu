@@ -72,7 +72,7 @@ proc accumulateCounters(info: Info): int =
   for i in info.counters:
     result += i
 
-proc packetListener(h: ptr pfring_pkthdr, p: ptr cstring, user_bytes: ptr cstring) =
+proc packetListener(h: ptr pfring_pkthdr, p: ptr cstring, user_bytes: ptr cstring) {.cdecl.} =
   var hasSyn, hasAck: bool
   var currentSecond: int
 
@@ -145,8 +145,11 @@ proc main() =
   setControlCHook(signalHandler)
 
   #discard pfring_set_socket_mode(r, recv_only_mode)
-  discard pfring_enable_ring(r)
-  discard pfring_loop(r, packetListener, nil, 1)
+  discard pfring_enable_ring
+
+  var user_bytes: cstring = "fuck"
+
+  discard pfring_loop(r, packetListener, addr user_bytes, 1)
 
 when isMainModule:
   var cfgFile: string

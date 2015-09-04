@@ -4,7 +4,7 @@ export ipset_cmd_enum
 
 
 #proc outfn(fmt: string, n: varargs[string, $]):
-proc c_printf(frmt: cstring) {.importc: "printf", header: "<stdio.h>", varargs.}
+proc c_printf(frmt: cstring) {.cdecl, importc: "printf", header: "<stdio.h>", varargs.}
 
 proc ipcmd*(blacklist: string, address: cstring, cmd: ipset_cmd_enum): int =
   ipset_load_types()

@@ -72,18 +72,22 @@ proc accumulateCounters(info: Info): int =
   for i in info.counters:
     result += i
 
-proc packetListener(h: ptr pfring_pkthdr, p: ptr cstring, user_bytes: ptr cstring) {.cdecl.} =
+proc packetListener(h: ptr pfring_pkthdr, p: cstring, user_bytes: ptr cstring) {.cdecl.} =
+  var src_addr, dst_addr: InAddr
   var hasSyn, hasAck: bool
   var currentSecond: int
 
   discard pfring_parse_pkt(p, h, 4, 0, 0)
-  #p.parsePacket(h, 4, 0, 0)
-  let pkt = addr h.extended_hdr.parsed_pkt
+
+  # Small hack to make pfring_parse_pkt parse L4 info
+  # Still dont know why header pointer dont reset for each loop, like C code does
+  h.extended_hdr.parsed_pkt.offset.l4_offset = 0
+
+  var pkt = addr h.extended_hdr.parsed_pkt
 
   if banList.contains(pkt.ip_src.v4):
     # already banned
     return
-
 
   if pkt.l3_proto.int != IPPROTO_TCP:
     return
@@ -91,45 +95,47 @@ proc packetListener(h: ptr pfring_pkthdr, p: ptr cstring, user_bytes: ptr cstrin
   if pkt.ip_version == 4:
     if not (pkt.l4_dst_port in cfg.ports):
       return
-    var src_addr, dst_addr: InAddr
+
     src_addr.s_addr = htonl(pkt.ip_src.v4)
     dst_addr.s_addr = htonl(pkt.ip_dst.v4)
+
     echo "$#:$# => $#:$#" % [$inet_ntoa(src_addr), $pkt.l4_src_port, $inet_ntoa(dst_addr), $pkt.l4_dst_port]
 
     hasSyn = (pkt.tcp.flags and TH_SYN) != 0
     hasAck = (pkt.tcp.flags and TH_ACK) != 0
 
-    #if hasSyn:
-    currentSecond = getLocalTime(getTime()).second mod cfg.recalculationTime
+    if hasSyn:
+      currentSecond = getLocalTime(getTime()).second mod cfg.recalculationTime
 
-    if not lookupTable.hasKey(pkt.ip_src.v4):
-      var info: Info
-      info.lastActive = getTime()
-      info.counters[currentSecond] = 1
-      lookupTable[pkt.ip_src.v4] = info
-    else:
-      var indexForNullify = abs(cfg.recalculationTime - currentSecond)
-      var info = lookupTable[pkt.ip_src.v4]
-      info.counters[indexForNullify] = 0
-      inc(info.counters[currentSecond])
-      info.lastActive = getTime()
-      lookupTable[pkt.ip_src.v4] = info
+      if not lookupTable.hasKey(pkt.ip_src.v4):
+        var info: Info
+        info.lastActive = getTime()
+        info.counters[currentSecond] = 1
+        lookupTable[pkt.ip_src.v4] = info
+      else:
+        var indexForNullify = abs(cfg.recalculationTime - currentSecond)
+        var info = lookupTable[pkt.ip_src.v4]
+        info.counters[indexForNullify] = 0
+        inc(info.counters[currentSecond])
+        info.lastActive = getTime()
+        lookupTable[pkt.ip_src.v4] = info
 
 
-      var requestsPerCalculationPeriod = lookupTable[pkt.ip_src.v4].accumulateCounters()
-      var requestsPerSecond = int(requestsPerCalculationPeriod / cfg.recalculationTime)
+        var requestsPerCalculationPeriod = lookupTable[pkt.ip_src.v4].accumulateCounters()
+        var requestsPerSecond = int(requestsPerCalculationPeriod / cfg.recalculationTime)
 
-      if requestsPerSecond >= cfg.rateLimit:
-        echo "[BAN] IP: ", inet_ntoa(src_addr), " exeed rate limit ", requestsPerSecond, " requests"
+        if requestsPerSecond >= cfg.rateLimit:
+          echo "[BAN] IP: ", inet_ntoa(src_addr), " exeed rate limit ", requestsPerSecond, " requests"
 
-        # call ipset ban
-        let ret = ipcmd(cfg.blacklistName, inet_ntoa(src_addr), IPSET_CMD_ADD)
-        if ret == 0:
-          # Add to ban list
-          banList.add(pkt.ip_src.v4)
-        else:
-          echo "[ERROR] Ban failed with error: ", ret
+          # call ipset ban
+          let ret = ipcmd(cfg.blacklistName, inet_ntoa(src_addr), IPSET_CMD_ADD)
+          if ret == 0:
+            # Add to ban list
+            banList.add(pkt.ip_src.v4)
+          #else:
+            #echo "[ERROR] Ban failed with error: ", ret
 
+  #memset(h, 0, sizeof(h))
 
   # else: ipv6 is not supported yet
 
@@ -137,7 +143,7 @@ proc main() =
   var flags: uint32 = 0
   flags = flags or PF_RING_PROMISC
   flags = flags or PF_RING_DO_NOT_PARSE
-  let r = pfring_open(cfg.iface, 1500, flags)
+  var r = pfring_open(cfg.iface, 1500, flags)
 
   if r.isNil:
     quit("pfring_open error: $#" % $errno, QuitFailure)
@@ -145,11 +151,8 @@ proc main() =
   setControlCHook(signalHandler)
 
   #discard pfring_set_socket_mode(r, recv_only_mode)
-  discard pfring_enable_ring
-
-  var user_bytes: cstring = "fuck"
-
-  discard pfring_loop(r, packetListener, addr user_bytes, 1)
+  discard pfring_enable_ring(r)
+  discard pfring_loop(r, packetListener, nil, 1)
 
 when isMainModule:
   var cfgFile: string

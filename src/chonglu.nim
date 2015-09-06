@@ -76,7 +76,7 @@ proc accumulateCounters(info: Info): int =
 
 proc packetListener(h: ptr pfring_pkthdr, p: cstring, user_bytes: ptr cstring) {.cdecl.} =
   var src_addr: InAddr
-  var hasSyn, hasAck: bool
+  var isSyn: bool
   var currentSecond: int
 
   discard pfring_parse_pkt(p, h, 4, 0, 0)
@@ -105,10 +105,10 @@ proc packetListener(h: ptr pfring_pkthdr, p: cstring, user_bytes: ptr cstring) {
 
       debug(inet_ntoa(src_addr), ":", pkt.l4_src_port, " => ", inet_ntoa(dst_addr), ":", pkt.l4_dst_port)
 
-    hasSyn = (pkt.tcp.flags and TH_SYN) != 0
-    #hasAck = (pkt.tcp.flags and TH_ACK) != 0
+    isSyn = (pkt.tcp.flags and TH_SYN) != 0
+    #isAck = (pkt.tcp.flags and TH_ACK) != 0
 
-    if hasSyn:
+    if isSyn:
       currentSecond = getLocalTime(getTime()).second mod cfg.recalculationTime
 
       if not lookupTable.hasKey(pkt.ip_src.v4):
@@ -164,7 +164,8 @@ proc main() =
 
   setControlCHook(signalHandler)
 
-  #discard pfring_set_socket_mode(r, recv_only_mode)
+  #TODO check result
+  discard pfring_set_socket_mode(ring, recv_only_mode)
   discard pfring_enable_ring(ring)
 
   info("Start listening for incoming packets on ", cfg.iface, " and ports ", cfg.ports)

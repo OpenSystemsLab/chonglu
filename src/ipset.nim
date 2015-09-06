@@ -27,8 +27,6 @@ proc ipcmd*(blacklist: string, address: cstring, cmd: ipset_cmd_enum): int =
   if typ.isNil:
     return 3
 
-
-
   ret = ipset_parse_elem(session, true, address)
   if ret < 0:
     return 4
@@ -42,7 +40,6 @@ proc ipcmd*(blacklist: string, address: cstring, cmd: ipset_cmd_enum): int =
     return 7
 
   discard ipset_session_fini(session)
-
 
   return 0
 

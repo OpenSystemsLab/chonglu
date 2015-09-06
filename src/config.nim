@@ -10,6 +10,7 @@ type
     LMDB
 
   Config* = object
+    debugMode*: bool
     iface*: string
     ports*: seq[uint16]
     rateLimit*: int
@@ -18,6 +19,7 @@ type
     redisHost*, redisPort*, redisDatabase*, redisPrefix*: string
     recalculationTime*: int
     blacklistName*: string
+    logPath*: string
 
 proc initConfig(): Config =
   result.iface = "any"
@@ -46,7 +48,9 @@ proc parseConfig*(path: string): Config =
       of cfgEof:
         break
       of cfgKeyValuePair:
-        if e.key == "interface":
+        if e.key == "debug":
+          result.debugMode = parseBool(e.value)
+        elif e.key == "interface":
           result.iface = e.value
         elif e.key == "port":
           result.ports.add(parseInt(e.value).uint16)
@@ -73,6 +77,8 @@ proc parseConfig*(path: string): Config =
           result.recalculationTime = parseInt(e.value)
         elif e.key == "ipset_blacklist":
           result.blacklistName = e.value
+        elif e.key == "log_path":
+          result.logPath = e.value
         else:
           echo("Unknown config value: " & e.key & ": " & e.value)
       of cfgError:

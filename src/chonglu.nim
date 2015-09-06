@@ -4,8 +4,7 @@ import parseopt2
 import redis
 import tables
 import times
-
-import nimprof
+import logging
 
 import ipset
 import ../../pfring.nim/pfring/wrapper
@@ -34,7 +33,7 @@ type
     lastActive: Time
 
 var
-
+  ring: ptr pfring
   cfg: Config
   lookupTable = initTable[int32, Info]()
   banList: seq[int32] = @[]
@@ -61,9 +60,12 @@ proc parseCommandLine(configFile: var string) =
     of cmdEnd: break
 
 proc signalHandler() {.noconv.} =
-  #let stat = ring.getStats()
-  #echo "Received " & $stat.received & " packets, dropped " & $stat.dropped & " packets"
-  #ring.close()
+  var stat: pfring_stat
+
+  let res = pfring_stats(ring, addr stat)
+  if res == 0:
+    info("Received ", stat.recv, " packets, dropped ", stat.drop, " packets")
+  pfring_close(ring)
   quit(QuitSuccess)
 
 
@@ -73,7 +75,7 @@ proc accumulateCounters(info: Info): int =
     result += i
 
 proc packetListener(h: ptr pfring_pkthdr, p: cstring, user_bytes: ptr cstring) {.cdecl.} =
-  var src_addr, dst_addr: InAddr
+  var src_addr: InAddr
   var hasSyn, hasAck: bool
   var currentSecond: int
 
@@ -96,13 +98,15 @@ proc packetListener(h: ptr pfring_pkthdr, p: cstring, user_bytes: ptr cstring) {
     if not (pkt.l4_dst_port in cfg.ports):
       return
 
-    src_addr.s_addr = htonl(pkt.ip_src.v4)
-    dst_addr.s_addr = htonl(pkt.ip_dst.v4)
+    if cfg.debugMode:
+      var dst_addr: InAddr
+      src_addr.s_addr = htonl(pkt.ip_src.v4)
+      dst_addr.s_addr = htonl(pkt.ip_dst.v4)
 
-    echo "$#:$# => $#:$#" % [$inet_ntoa(src_addr), $pkt.l4_src_port, $inet_ntoa(dst_addr), $pkt.l4_dst_port]
+      debug(inet_ntoa(src_addr), ":", pkt.l4_src_port, " => ", inet_ntoa(dst_addr), ":", pkt.l4_dst_port)
 
     hasSyn = (pkt.tcp.flags and TH_SYN) != 0
-    hasAck = (pkt.tcp.flags and TH_ACK) != 0
+    #hasAck = (pkt.tcp.flags and TH_ACK) != 0
 
     if hasSyn:
       currentSecond = getLocalTime(getTime()).second mod cfg.recalculationTime
@@ -125,37 +129,52 @@ proc packetListener(h: ptr pfring_pkthdr, p: cstring, user_bytes: ptr cstring) {
         var requestsPerSecond = int(requestsPerCalculationPeriod / cfg.recalculationTime)
 
         if requestsPerSecond >= cfg.rateLimit:
-          echo "[BAN] IP: ", inet_ntoa(src_addr), " exeed rate limit ", requestsPerSecond, " requests"
+          warn("IP: ", inet_ntoa(src_addr), " exeed rate limit ", requestsPerSecond, " requrests", inet_ntoa(src_addr))
 
           # call ipset ban
           let ret = ipcmd(cfg.blacklistName, inet_ntoa(src_addr), IPSET_CMD_ADD)
           if ret == 0:
             # Add to ban list
             banList.add(pkt.ip_src.v4)
-          #else:
-            #echo "[ERROR] Ban failed with error: ", ret
-
-  #memset(h, 0, sizeof(h))
+          else:
+            error("Ban failed with error: ", ret)
 
   # else: ipv6 is not supported yet
 
+proc initLogger() =
+  if cfg.logPath.isNil or cfg.logPath == "":
+    return
+
+  addHandler(newFileLogger(cfg.logPath))
+
+
 proc main() =
+  initLogger()
+
+  info(name, " started")
+
   var flags: uint32 = 0
   flags = flags or PF_RING_PROMISC
   flags = flags or PF_RING_DO_NOT_PARSE
-  var r = pfring_open(cfg.iface, 1500, flags)
+  ring = pfring_open(cfg.iface, 1500, flags)
 
-  if r.isNil:
+  if ring.isNil:
     quit("pfring_open error: $#" % $errno, QuitFailure)
+
 
   setControlCHook(signalHandler)
 
   #discard pfring_set_socket_mode(r, recv_only_mode)
-  discard pfring_enable_ring(r)
-  discard pfring_loop(r, packetListener, nil, 1)
+  discard pfring_enable_ring(ring)
+
+  info("Start listening for incoming packets on ", cfg.iface, " and ports ", cfg.ports)
+
+  discard pfring_loop(ring, packetListener, nil, 1)
 
 when isMainModule:
   var cfgFile: string
   parseCommandLine(cfgFile)
   cfg = parseConfig(cfgFile)
+
+
   main()

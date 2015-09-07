@@ -170,6 +170,7 @@ proc main() =
   setControlCHook(signalHandler)
 
   #TODO check result
+  discard pfring_set_direction(ring, rx_only_direction)
   discard pfring_set_socket_mode(ring, recv_only_mode)
   discard pfring_enable_ring(ring)
 

@@ -98,11 +98,10 @@ proc packetListener(h: ptr pfring_pkthdr, p: cstring, user_bytes: ptr cstring) {
     if not (pkt.l4_dst_port in cfg.ports):
       return
 
+    src_addr.s_addr = htonl(pkt.ip_src.v4)
     if cfg.debugMode:
       var dst_addr: InAddr
-      src_addr.s_addr = htonl(pkt.ip_src.v4)
       dst_addr.s_addr = htonl(pkt.ip_dst.v4)
-
       debug(inet_ntoa(src_addr), ":", pkt.l4_src_port, " => ", inet_ntoa(dst_addr), ":", pkt.l4_dst_port)
 
     isSyn = (pkt.tcp.flags and TH_SYN) != 0
@@ -129,7 +128,7 @@ proc packetListener(h: ptr pfring_pkthdr, p: cstring, user_bytes: ptr cstring) {
         var requestsPerSecond = int(requestsPerCalculationPeriod / cfg.recalculationTime)
 
         if requestsPerSecond >= cfg.rateLimit:
-          warn("IP: ", inet_ntoa(src_addr), " exeed rate limit ", requestsPerSecond, " requrests", inet_ntoa(src_addr))
+          warn("IP: ", inet_ntoa(src_addr), " exeed rate limit ", requestsPerSecond, " requests")
 
           # call ipset ban
           let ret = ipcmd(cfg.blacklistName, inet_ntoa(src_addr), IPSET_CMD_ADD)
@@ -147,9 +146,16 @@ proc initLogger() =
 
   addHandler(newFileLogger(cfg.logPath))
 
+proc initBlacklist() =
+  if ipcmd(cfg.blacklistName, "8.8.8.8", IPSET_CMD_TEST) == 7:
+    var ret = ipcmd(cfg.blacklistName, "iphash", IPSET_CMD_CREATE)
+    if ret != 0:
+      quit("Unable to create ipset blacklist, error: $#" % $ret)
 
 proc main() =
+  initBlacklist()
   initLogger()
+
 
   info(name, " started")
 
@@ -160,7 +166,6 @@ proc main() =
 
   if ring.isNil:
     quit("pfring_open error: $#" % $errno, QuitFailure)
-
 
   setControlCHook(signalHandler)
 
@@ -176,6 +181,5 @@ when isMainModule:
   var cfgFile: string
   parseCommandLine(cfgFile)
   cfg = parseConfig(cfgFile)
-
 
   main()
